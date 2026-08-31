@@ -117,6 +117,10 @@ class Game:
     def deck_remaining(self) -> int:
         return len(self.deck)
 
+    def remaining_tiles(self) -> list[Tile]:
+        """Tiles still in the deck (the set a perfect-memory player knows remain)."""
+        return [self._tiles_by_id[i] for i in self.deck]
+
     def available_colors(self) -> set[int]:
         """Colour ids whose lily token has not yet been placed."""
         return {c.id for c in self.colors} - set(self.tokens)

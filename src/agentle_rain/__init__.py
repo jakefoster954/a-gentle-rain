@@ -22,10 +22,12 @@ Typical use::
 
 from __future__ import annotations
 
+from .analysis import WinProbabilityResult, estimate_win_probability
 from .board import Board, Coord
 from .engine import Game, GameState, InvalidAction, PendingBloom
 from .geometry import Direction
 from .model import Color, PlacedTile, Placement, Tile
+from .solver import optimal_online_winprob
 from .tilesets import make_colors, make_tiles, random_tileset
 
 __all__ = [
@@ -43,4 +45,7 @@ __all__ = [
     "make_colors",
     "make_tiles",
     "random_tileset",
+    "estimate_win_probability",
+    "WinProbabilityResult",
+    "optimal_online_winprob",
 ]

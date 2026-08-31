@@ -100,6 +100,35 @@ In-memory games are **not** restricted to the 8-colour / 28-tile retail setup, s
 you can freely vary deck size and palette when exploring questions like the
 fewest tiles needed to win.
 
+### Win-probability analysis
+
+`estimate_win_probability` answers "how often can this tile set be won, playing
+optimally online (never seeing the future draw order)?"
+
+```python
+from agentle_rain import estimate_win_probability
+from agentle_rain.data_loader import load_colors_and_tiles
+
+colors, tiles = load_colors_and_tiles()
+print(estimate_win_probability(colors, tiles, time_budget=60))
+```
+
+- **Small decks** (≈ ≤12 tiles): returns the **exact** optimal online win
+  probability via memoised expectimax over the belief state
+  `(board, remaining tiles, bloomed colours, tile in hand)`.
+- **Large decks** (e.g. the retail 28): exact solving is infeasible, so it
+  returns a **Monte-Carlo estimate** — the win rate of a strong online heuristic
+  over many random shuffles, with a 95% confidence interval. That figure is a
+  **lower bound** on the true optimum (optimal play can only do at least as well).
+- It always returns a number within `time_budget` seconds.
+
+From the command line:
+
+```bash
+python tools/estimate_solvable.py --time-budget 60
+python tools/estimate_solvable.py --path experiments/small.json --time-budget 30
+```
+
 ## Editing the tiles
 
 The tile data lives in `src/agentle_rain/data/tiles.json`, in a compact,
@@ -145,10 +174,13 @@ src/agentle_rain/
   engine.py        # Game: the state machine and public API
   agents.py        # simple automated players for headless simulation
   tilesets.py      # build colours/tiles in code (make_tiles, random_tileset, ...)
+  solver.py        # exact optimal-online win probability (small decks)
+  analysis.py      # estimate_win_probability (exact + Monte-Carlo)
   data/tiles.json  # the 8 colours and 28 tiles (compact, editable)
   ui/pygame_ui.py  # the interactive game UI
   ui/editor.py     # the tile editor UI
-tools/generate_tiles.py   # regenerate / verify the tile set
+tools/generate_tiles.py    # regenerate / verify the tile set
+tools/estimate_solvable.py # estimate a set's win probability
 tests/                     # pytest suite
 ```
 

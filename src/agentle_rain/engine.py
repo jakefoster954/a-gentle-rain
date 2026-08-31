@@ -58,6 +58,11 @@ class Game:
         Optional pre-seeded ``random.Random`` for full control over shuffling.
     data_path:
         Optional path to an alternative tile-definition JSON file.
+    colors, tiles:
+        Optional in-memory palette and tile list. Provide both to build a game
+        without any JSON file (ideal for simulations that generate their own tile
+        sets). These take precedence over ``data_path`` and are not restricted to
+        the 8-colour / 28-tile retail configuration.
     """
 
     def __init__(
@@ -65,8 +70,19 @@ class Game:
         seed: int | None = None,
         rng: random.Random | None = None,
         data_path: str | None = None,
+        *,
+        colors: list[Color] | None = None,
+        tiles: list[Tile] | None = None,
     ) -> None:
-        self.colors, self._tiles = load_colors_and_tiles(data_path)
+        if colors is not None or tiles is not None:
+            if colors is None or tiles is None:
+                raise ValueError("provide both 'colors' and 'tiles', or neither")
+            self.colors = list(colors)
+            self._tiles = list(tiles)
+        else:
+            self.colors, self._tiles = load_colors_and_tiles(data_path)
+        if len({t.id for t in self._tiles}) != len(self._tiles):
+            raise ValueError("tiles must have unique ids")
         self._tiles_by_id = {t.id: t for t in self._tiles}
         self._rng = rng if rng is not None else random.Random(seed)
 

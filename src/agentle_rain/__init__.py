@@ -26,6 +26,7 @@ from .board import Board, Coord
 from .engine import Game, GameState, InvalidAction, PendingBloom
 from .geometry import Direction
 from .model import Color, PlacedTile, Placement, Tile
+from .tilesets import make_colors, make_tiles, random_tileset
 
 __all__ = [
     "Game",
@@ -39,4 +40,7 @@ __all__ = [
     "Tile",
     "PlacedTile",
     "Placement",
+    "make_colors",
+    "make_tiles",
+    "random_tileset",
 ]

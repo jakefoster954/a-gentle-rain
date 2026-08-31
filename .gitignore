@@ -24,3 +24,6 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# Experimental tile sets (see README: keep custom tiles.json here, ignored by git)
+experiments/

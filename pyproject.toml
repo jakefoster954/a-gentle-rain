@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 agentle-rain = "agentle_rain.__main__:main"
+agentle-rain-editor = "agentle_rain.ui.editor:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -15,10 +15,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from agentle_rain.data_loader import write_tiles_file  # noqa: E402
 
 # The eight lily/flower colours. Hex values are only used for the UI.
 COLORS = [
@@ -59,17 +61,9 @@ def generate_tiles(seed: int = SEED) -> list[dict]:
 
 
 def write_data(tiles: list[dict]) -> None:
-    payload = {
-        "_comment": (
-            "Placeholder tile set for 'A Gentle Rain'. 8 colours, 28 tiles. "
-            "'edges' lists the flower colour id on the (N, E, S, W) edge. "
-            "Regenerate with tools/generate_tiles.py or edit by hand."
-        ),
-        "colors": COLORS,
-        "tiles": tiles,
-    }
+    edges = [t["edges"] for t in tiles]
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(json.dumps(payload, indent=2) + "\n")
+    write_tiles_file(DATA_FILE, COLORS, edges)
     print(f"Wrote {len(tiles)} tiles to {DATA_FILE}")
 
 

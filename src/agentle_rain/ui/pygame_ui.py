@@ -15,7 +15,11 @@ Run with ``python -m agentle_rain`` or the ``agentle-rain`` command.
 
 from __future__ import annotations
 
+import contextlib
+import os
+
 import pygame
+from pygame._sdl2 import video as sdl2
 
 from ..engine import Game, GameState
 from ..geometry import Direction
@@ -26,6 +30,10 @@ WINDOW_W, WINDOW_H = 1100, 760
 SIDEBAR_W = 300
 BOARD_W = WINDOW_W - SIDEBAR_W
 MIN_CELL, MAX_CELL = 26, 96
+# The scene is rendered this many times larger than the window and presented at
+# the display's native pixel resolution, which anti-aliases every shape and glyph
+# and keeps them crisp on high-DPI (Retina) displays.
+SUPERSAMPLE = 2
 
 BG = (24, 28, 36)
 BOARD_BG = (18, 22, 28)
@@ -55,34 +63,36 @@ class Button:
         self.rect = pygame.Rect(0, 0, 0, 0)
         self.enabled = True
 
-    def draw(self, surface: pygame.Surface, font: pygame.font.Font, mouse: tuple[int, int]) -> None:
+    def draw(self, ui: GameUI, mouse: tuple[int, int]) -> None:
         hovered = self.enabled and self.rect.collidepoint(mouse)
         color = BUTTON_HOVER if hovered else BUTTON
         if not self.enabled:
             color = (38, 44, 52)
-        pygame.draw.rect(surface, color, self.rect, border_radius=8)
+        ui.draw_rect(color, self.rect, radius=8)
         label = f"{self.label}  ({self.key})"
-        text = font.render(label, True, TEXT if self.enabled else MUTED)
-        surface.blit(text, text.get_rect(center=self.rect.center))
+        ui.draw_text_center(ui.small, label, self.rect.center, TEXT if self.enabled else MUTED)
 
 
 class GameUI:
     """Interactive pygame front-end wrapping a :class:`Game`."""
 
-    def __init__(self, seed: int | None = None) -> None:
+    def __init__(self, seed: int | None = None, data_path: str | None = None) -> None:
         pygame.init()
-        pygame.display.set_caption("A Gentle Rain")
-        self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
+        self._init_display()
+        self.canvas = pygame.Surface((WINDOW_W * self.s, WINDOW_H * self.s))
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("helvetica,arial", 18)
-        self.small = pygame.font.SysFont("helvetica,arial", 15)
-        self.big = pygame.font.SysFont("helvetica,arial", 26, bold=True)
+        self.font = pygame.font.SysFont("helvetica,arial", 18 * self.s)
+        self.small = pygame.font.SysFont("helvetica,arial", 15 * self.s)
+        self.big = pygame.font.SysFont("helvetica,arial", 26 * self.s, bold=True)
 
         self._seed = seed
-        self.game = Game(seed=seed)
+        self._data_path = data_path
+        self.game = Game(seed=seed, data_path=data_path)
         self.orientation = 0
         self.message = ""
         self._legal_cache: list[Placement] = []
+        self._mouse: tuple[int, int] = (0, 0)
+        self._cursor: int | None = None
 
         self.buttons = {
             "draw": Button("Draw tile", "Space", "draw"),
@@ -105,13 +115,13 @@ class GameUI:
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._on_click(mouse)
             self._draw(mouse)
-            pygame.display.flip()
+            self._present()
             self.clock.tick(60)
         pygame.quit()
 
     # ---------------------------------------------------------------- actions
     def _new_game(self) -> None:
-        self.game = Game(seed=self._seed)
+        self.game = Game(seed=self._seed, data_path=self._data_path)
         self.orientation = 0
         self.message = ""
 
@@ -211,8 +221,9 @@ class GameUI:
 
     # ---------------------------------------------------------------- drawing
     def _draw(self, mouse: tuple[int, int]) -> None:
-        self.screen.fill(BG)
-        pygame.draw.rect(self.screen, BOARD_BG, (0, 0, BOARD_W, WINDOW_H))
+        self._mouse = mouse
+        self.canvas.fill(BG)
+        self.draw_rect(BOARD_BG, (0, 0, BOARD_W, WINDOW_H))
         self._legal_cache = (
             self.game.legal_placements() if self.game.state is GameState.PLACE else []
         )
@@ -220,27 +231,132 @@ class GameUI:
         self._draw_tiles()
         self._draw_holes()
         self._draw_sidebar(mouse)
+        self._update_cursor(mouse)
+
+    def _update_cursor(self, mouse: tuple[int, int]) -> None:
+        cursor = (
+            pygame.SYSTEM_CURSOR_HAND if self._is_clickable(mouse) else pygame.SYSTEM_CURSOR_ARROW
+        )
+        if cursor != self._cursor:
+            self._cursor = cursor
+            # Some platforms/headless drivers cannot create system cursors.
+            with contextlib.suppress(pygame.error):
+                pygame.mouse.set_cursor(cursor)
+
+    def _is_clickable(self, mouse: tuple[int, int]) -> bool:
+        if any(b.enabled and b.rect.collidepoint(mouse) for b in self.buttons.values()):
+            return True
+        if any(rect.collidepoint(mouse) for rect, _ in self._swatch_rects):
+            return True
+        return self._hovered_placement(mouse) is not None
+
+    def _hovered_placement(self, mouse: tuple[int, int]) -> Placement | None:
+        """The legal placement under the mouse at the current orientation, if any."""
+        if self.game.state is not GameState.PLACE or mouse[0] >= BOARD_W:
+            return None
+        row, col = self._pixel_to_cell(mouse)
+        target = Placement(row, col, self.orientation)
+        return target if target in self._legal_cache else None
 
     def _color_rgb(self, color_id: int) -> tuple[int, int, int]:
         return hex_to_rgb(self.game.colors[color_id].hex)
 
+    # --------------------------------------------------------- display / present
+    def _init_display(self) -> None:
+        # Render at the display's native pixel resolution and present through an
+        # accelerated renderer, so the image is crisp on high-DPI (Retina)
+        # screens instead of being upscaled by the OS.
+        os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "best")
+        try:
+            self.window = sdl2.Window(
+                "A Gentle Rain", size=(WINDOW_W, WINDOW_H), allow_highdpi=True
+            )
+            self.renderer = sdl2.Renderer(self.window, vsync=True)
+            native_w = self.renderer.get_viewport().width
+            self.s = max(SUPERSAMPLE, round(native_w / WINDOW_W))
+            self.use_renderer = True
+            self.screen = None
+        except Exception:
+            # Fall back to a classic scaled display surface if no renderer is available.
+            self.window = None
+            self.renderer = None
+            self.use_renderer = False
+            self.s = SUPERSAMPLE
+            pygame.display.set_caption("A Gentle Rain")
+            try:
+                self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H), pygame.SCALED, vsync=1)
+            except pygame.error:
+                self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
+
+    def _present(self) -> None:
+        if self.use_renderer:
+            texture = sdl2.Texture.from_surface(self.renderer, self.canvas)
+            self.renderer.clear()
+            texture.draw()
+            self.renderer.present()
+        else:
+            pygame.transform.smoothscale(self.canvas, (WINDOW_W, WINDOW_H), self.screen)
+            pygame.display.flip()
+
+    # ------------------------------------------------------------ draw helpers
+    # These take logical coordinates and render onto the supersampled canvas.
+    def _scaled_rect(self, rect) -> pygame.Rect:
+        s = self.s
+        return pygame.Rect(rect[0] * s, rect[1] * s, rect[2] * s, rect[3] * s)
+
+    def draw_rect(self, color, rect, width: int = 0, radius: int = 0) -> None:
+        pygame.draw.rect(
+            self.canvas,
+            color,
+            self._scaled_rect(rect),
+            width * self.s,
+            border_radius=radius * self.s,
+        )
+
+    def draw_circle(self, color, center, radius: int, width: int = 0) -> None:
+        s = self.s
+        pygame.draw.circle(
+            self.canvas, color, (center[0] * s, center[1] * s), radius * s, width * s
+        )
+
+    def draw_alpha_rect(self, rgba, rect, radius: int = 0) -> None:
+        r = self._scaled_rect(rect)
+        surf = pygame.Surface(r.size, pygame.SRCALPHA)
+        if radius:
+            pygame.draw.rect(surf, rgba, surf.get_rect(), border_radius=radius * self.s)
+        else:
+            surf.fill(rgba)
+        self.canvas.blit(surf, r.topleft)
+
+    def draw_text(self, font: pygame.font.Font, text: str, topleft, color) -> None:
+        s = self.s
+        self.canvas.blit(font.render(text, True, color), (topleft[0] * s, topleft[1] * s))
+
+    def draw_text_center(self, font: pygame.font.Font, text: str, center, color) -> None:
+        s = self.s
+        surf = font.render(text, True, color)
+        self.canvas.blit(surf, surf.get_rect(center=(center[0] * s, center[1] * s)))
+
     def _draw_legal_cells(self) -> None:
+        hovered = self._hovered_placement(self._mouse)
         for placement in self._legal_cache:
             if placement.orientation != self.orientation:
                 continue
             rect = self._cell_rect(placement.row, placement.col)
-            surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-            surf.fill((*HIGHLIGHT, 55))
-            self.screen.blit(surf, rect.topleft)
-            pygame.draw.rect(self.screen, HIGHLIGHT, rect, width=2, border_radius=6)
+            is_hover = hovered is not None and (placement.row, placement.col) == (
+                hovered.row,
+                hovered.col,
+            )
+            self.draw_alpha_rect((*HIGHLIGHT, 110 if is_hover else 55), rect, radius=6)
+            self.draw_rect(HIGHLIGHT, rect, width=3 if is_hover else 2, radius=6)
 
     def _draw_tiles(self) -> None:
         cell = self._view()[0]
         flower_r = max(4, int(cell * 0.16))
         for (row, col), placed in self.game.board:
             rect = self._cell_rect(row, col)
-            pygame.draw.rect(self.screen, TILE_FILL, rect, border_radius=6)
-            pygame.draw.rect(self.screen, TILE_EDGE, rect, width=1, border_radius=6)
+            self.draw_rect(TILE_FILL, rect, radius=6)
+            self.draw_rect(TILE_EDGE, rect, width=1, radius=6)
             centers = {
                 Direction.N: (rect.centerx, rect.top),
                 Direction.E: (rect.right, rect.centery),
@@ -249,8 +365,8 @@ class GameUI:
             }
             for direction, center in centers.items():
                 color = self._color_rgb(placed.edge_color(direction))
-                pygame.draw.circle(self.screen, color, center, flower_r)
-                pygame.draw.circle(self.screen, BOARD_BG, center, flower_r, width=1)
+                self.draw_circle(color, center, flower_r)
+                self.draw_circle(BOARD_BG, center, flower_r, width=1)
 
     def _draw_holes(self) -> None:
         cell = self._view()[0]
@@ -260,22 +376,22 @@ class GameUI:
             rect = self._cell_rect(row, col)
             center = (rect.right, rect.bottom)
             if color is None:
-                pygame.draw.circle(self.screen, HOLE_EMPTY, center, radius)
-                pygame.draw.circle(self.screen, TILE_EDGE, center, radius, width=2)
+                self.draw_circle(HOLE_EMPTY, center, radius)
+                self.draw_circle(TILE_EDGE, center, radius, width=2)
             else:
-                pygame.draw.circle(self.screen, self._color_rgb(color), center, radius)
-                pygame.draw.circle(self.screen, TEXT, center, radius, width=2)
+                self.draw_circle(self._color_rgb(color), center, radius)
+                self.draw_circle(TEXT, center, radius, width=2)
         for row, col in pending:
             rect = self._cell_rect(row, col)
             center = (rect.right, rect.bottom)
-            pygame.draw.circle(self.screen, HOLE_EMPTY, center, radius)
-            pygame.draw.circle(self.screen, PENDING, center, radius, width=3)
+            self.draw_circle(HOLE_EMPTY, center, radius)
+            self.draw_circle(PENDING, center, radius, width=3)
 
     # ---------------------------------------------------------------- sidebar
     def _draw_sidebar(self, mouse: tuple[int, int]) -> None:
         x = BOARD_W + 20
         y = 20
-        self.screen.blit(self.big.render("A Gentle Rain", True, TEXT), (x, y))
+        self.draw_text(self.big, "A Gentle Rain", (x, y), TEXT)
         y += 44
 
         rows = [
@@ -285,7 +401,7 @@ class GameUI:
             f"Discarded: {len(self.game.discarded)}",
         ]
         for line in rows:
-            self.screen.blit(self.font.render(line, True, TEXT), (x, y))
+            self.draw_text(self.font, line, (x, y), TEXT)
             y += 26
         y += 6
 
@@ -296,13 +412,13 @@ class GameUI:
 
         self._layout_buttons(x)
         for button in self.buttons.values():
-            button.draw(self.screen, self.small, mouse)
+            button.draw(self, mouse)
 
         if self.message:
-            self.screen.blit(self.small.render(self.message, True, PENDING), (x, WINDOW_H - 120))
+            self.draw_text(self.small, self.message, (x, WINDOW_H - 120), PENDING)
 
     def _draw_available(self, x: int, y: int) -> int:
-        self.screen.blit(self.small.render("Lily colours (dim = bloomed)", True, MUTED), (x, y))
+        self.draw_text(self.small, "Lily colours (dim = bloomed)", (x, y), MUTED)
         y += 22
         available = self.game.available_colors()
         for i, color in enumerate(self.game.colors):
@@ -311,22 +427,22 @@ class GameUI:
             rgb = hex_to_rgb(color.hex)
             if i not in available:
                 rgb = tuple(c // 3 for c in rgb)  # type: ignore[assignment]
-            pygame.draw.circle(self.screen, rgb, (cx + 12, cy + 12), 12)
-            pygame.draw.circle(self.screen, MUTED, (cx + 12, cy + 12), 12, width=1)
-            self.screen.blit(self.small.render(color.name[:6], True, MUTED), (cx, cy + 24))
+            self.draw_circle(rgb, (cx + 12, cy + 12), 12)
+            self.draw_circle(MUTED, (cx + 12, cy + 12), 12, width=1)
+            self.draw_text(self.small, color.name[:6], (cx, cy + 24), MUTED)
         return y + 2 * 46 + 6
 
     def _draw_hand(self, x: int, y: int) -> int:
-        self.screen.blit(self.small.render("Tile in hand", True, MUTED), (x, y))
+        self.draw_text(self.small, "Tile in hand", (x, y), MUTED)
         y += 22
         size = 96
         rect = pygame.Rect(x, y, size, size)
         if self.game.current_tile is None:
-            pygame.draw.rect(self.screen, TILE_FILL, rect, border_radius=8)
-            self.screen.blit(self.small.render("—", True, MUTED), rect.center)
+            self.draw_rect(TILE_FILL, rect, radius=8)
+            self.draw_text_center(self.small, "—", rect.center, MUTED)
             return y + size + 12
-        pygame.draw.rect(self.screen, TILE_FILL, rect, border_radius=8)
-        pygame.draw.rect(self.screen, TILE_EDGE, rect, width=1, border_radius=8)
+        self.draw_rect(TILE_FILL, rect, radius=8)
+        self.draw_rect(TILE_EDGE, rect, width=1, radius=8)
         centers = {
             Direction.N: (rect.centerx, rect.top),
             Direction.E: (rect.right, rect.centery),
@@ -335,8 +451,8 @@ class GameUI:
         }
         for direction, center in centers.items():
             color_id = self.game.current_tile.edge_color(direction, self.orientation)
-            pygame.draw.circle(self.screen, self._color_rgb(color_id), center, 14)
-            pygame.draw.circle(self.screen, BOARD_BG, center, 14, width=1)
+            self.draw_circle(self._color_rgb(color_id), center, 14)
+            self.draw_circle(BOARD_BG, center, 14, width=1)
         return y + size + 12
 
     def _draw_bloom_picker(self, x: int, y: int) -> int:
@@ -345,12 +461,12 @@ class GameUI:
             return y
         bloom = self.game.pending_blooms[0]
         options = sorted(bloom.candidate_colors & self.game.available_colors())
-        self.screen.blit(self.font.render("Choose a lily colour:", True, PENDING), (x, y))
+        self.draw_text(self.font, "Choose a lily colour:", (x, y), PENDING)
         y += 30
         for i, color_id in enumerate(options):
             rect = pygame.Rect(x + i * 52, y, 44, 44)
-            pygame.draw.rect(self.screen, self._color_rgb(color_id), rect, border_radius=8)
-            pygame.draw.rect(self.screen, TEXT, rect, width=2, border_radius=8)
+            self.draw_rect(self._color_rgb(color_id), rect, radius=8)
+            self.draw_rect(TEXT, rect, width=2, radius=8)
             self._swatch_rects.append((rect, color_id))
         return y + 60
 
@@ -359,9 +475,9 @@ class GameUI:
             return y
         outcome = "You win!" if self.game.is_won else "Out of tiles"
         color = HIGHLIGHT if self.game.is_won else PENDING
-        self.screen.blit(self.big.render(outcome, True, color), (x, y))
+        self.draw_text(self.big, outcome, (x, y), color)
         y += 34
-        self.screen.blit(self.font.render(f"Score: {self.game.score}", True, TEXT), (x, y))
+        self.draw_text(self.font, f"Score: {self.game.score}", (x, y), TEXT)
         return y + 30
 
     def _layout_buttons(self, x: int) -> None:
@@ -386,5 +502,5 @@ class GameUI:
             )
 
 
-def run(seed: int | None = None) -> None:
-    GameUI(seed=seed).run()
+def run(seed: int | None = None, data_path: str | None = None) -> None:
+    GameUI(seed=seed, data_path=data_path).run()

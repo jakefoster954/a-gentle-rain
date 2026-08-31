@@ -39,9 +39,15 @@ python -m agentle_rain --seed 42  # a repeatable shuffle
 python -m agentle_rain --path my.json  # play a custom tile set
 ```
 
-**Controls:** `Space` draw · `R` rotate · left-click a green highlight to place ·
-`D` discard (when nothing fits) · click a colour swatch to bloom a hole · `L`
-leaderboard · `N` new game · `Esc` quit.
+**Controls:** `Space` draw · `R` rotate · **arrow keys** move the placement cursor ·
+`Enter` (or `Space`) place · `D` discard (when nothing fits) · `L` leaderboard ·
+`N` new game · `Esc` quit. The mouse works too: left-click a green highlight to
+place, or click a colour swatch to bloom.
+
+**Blooming a hole:** when a 2×2 completes, choose the lily colour with the
+**arrow keys** (or number keys `1`–`9`) and press `Enter` — or click a swatch. So
+the whole game is playable with the keyboard alone. The selected cell shows a
+preview of the tile you're about to place.
 
 A **timer** starts on your first draw and stops when the game ends. Each tile set
 has its own **leaderboard** (ordered by score, then fastest time): press `L` to

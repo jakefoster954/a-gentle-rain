@@ -105,6 +105,8 @@ class GameUI:
         self._end_handled = False  # whether the game-over prompt has been shown
         self._entries: list[leaderboard.Entry] = []
         self._just_added: leaderboard.Entry | None = None
+        self._selected: tuple[int, int] | None = None  # keyboard placement cursor
+        self._bloom_index = 0  # keyboard selection among bloom colour swatches
 
         self.buttons = {
             "draw": Button("Draw tile", "Space", "draw"),
@@ -144,6 +146,8 @@ class GameUI:
         self._name_entry = None
         self._end_handled = False
         self._just_added = None
+        self._selected = None
+        self._bloom_index = 0
 
     def _do_draw(self) -> None:
         if self.game.state is not GameState.DRAW:
@@ -152,6 +156,7 @@ class GameUI:
         if self._timer_start is None:
             self._timer_start = time.perf_counter()
         self.orientation = 0
+        self._init_cursor()
         if self.game.state is GameState.PLACE and not self.game.has_legal_placement():
             self.message = "No legal placement — discard this tile."
         else:
@@ -161,10 +166,12 @@ class GameUI:
         if self.game.state is GameState.PLACE and not self.game.has_legal_placement():
             self.game.discard()
             self.message = "Tile discarded."
+            self._selected = None
 
     def _rotate(self) -> None:
         if self.game.state is GameState.PLACE:
             self.orientation = (self.orientation + 1) % 4
+            self._resnap_cursor()
 
     def _try_place(self, cell: tuple[int, int]) -> None:
         if self.game.state is not GameState.PLACE or self.game.current_tile is None:
@@ -173,6 +180,99 @@ class GameUI:
         if placement in self._legal_cache:
             self.game.place(placement)
             self.message = ""
+            self._selected = None
+            self._bloom_index = 0
+
+    # ------------------------------------------------------------ keyboard cursor
+    def _board_center(self) -> tuple[int, int]:
+        coords = self.game.board.occupied_coords()
+        if not coords:
+            return (0, 0)
+        rows = [r for r, _ in coords]
+        cols = [c for _, c in coords]
+        return (round(sum(rows) / len(rows)), round(sum(cols) / len(cols)))
+
+    @staticmethod
+    def _nearest_cell(cells: set[tuple[int, int]], target: tuple[int, int]) -> tuple[int, int]:
+        return min(cells, key=lambda c: (abs(c[0] - target[0]) + abs(c[1] - target[1]), c))
+
+    def _legal_cells(self) -> set[tuple[int, int]]:
+        return {
+            (p.row, p.col)
+            for p in self.game.legal_placements()
+            if p.orientation == self.orientation
+        }
+
+    def _init_cursor(self) -> None:
+        if self.game.state is not GameState.PLACE:
+            self._selected = None
+            return
+        placements = self.game.legal_placements()
+        if not placements:
+            self._selected = None
+            return
+        orientations = {p.orientation for p in placements}
+        if self.orientation not in orientations:
+            self.orientation = min(orientations)  # auto-advance to a playable rotation
+        cells = {(p.row, p.col) for p in placements if p.orientation == self.orientation}
+        self._selected = self._nearest_cell(cells, self._board_center())
+
+    def _resnap_cursor(self) -> None:
+        cells = self._legal_cells()
+        if not cells:
+            self._selected = None
+            return
+        if self._selected in cells:
+            return
+        target = self._selected if self._selected is not None else self._board_center()
+        self._selected = self._nearest_cell(cells, target)
+
+    def _move_cursor(self, key: int) -> None:
+        cells = self._legal_cells()
+        if not cells:
+            return
+        if self._selected not in cells:
+            self._selected = self._nearest_cell(cells, self._board_center())
+            return
+        dr, dc = {
+            pygame.K_UP: (-1, 0),
+            pygame.K_DOWN: (1, 0),
+            pygame.K_LEFT: (0, -1),
+            pygame.K_RIGHT: (0, 1),
+        }[key]
+        cur = self._selected
+        best: tuple[int, int] | None = None
+        best_score: tuple[int, int] | None = None
+        for cell in cells:
+            ddr, ddc = cell[0] - cur[0], cell[1] - cur[1]
+            if dr:  # vertical move: target must be further along dr
+                if (dr > 0 and ddr <= 0) or (dr < 0 and ddr >= 0):
+                    continue
+                score = (abs(ddr), abs(ddc))
+            else:  # horizontal move
+                if (dc > 0 and ddc <= 0) or (dc < 0 and ddc >= 0):
+                    continue
+                score = (abs(ddc), abs(ddr))
+            if best_score is None or score < best_score:
+                best_score, best = score, cell
+        if best is not None:
+            self._selected = best
+
+    def _place_selected(self) -> None:
+        if self.game.state is not GameState.PLACE or self._selected is None:
+            return
+        placement = Placement(self._selected[0], self._selected[1], self.orientation)
+        if placement in self.game.legal_placements():
+            self.game.place(placement)
+            self.message = ""
+            self._selected = None
+            self._bloom_index = 0
+
+    def _bloom_options(self) -> list[int]:
+        if self.game.state is not GameState.BLOOM or not self.game.pending_blooms:
+            return []
+        bloom = self.game.pending_blooms[0]
+        return sorted(bloom.candidate_colors & self.game.available_colors())
 
     def _pick_color(self, color_id: int) -> None:
         if self.game.state is not GameState.BLOOM:
@@ -181,6 +281,7 @@ class GameUI:
         options = bloom.candidate_colors & self.game.available_colors()
         if color_id in options:
             self.game.resolve_bloom(bloom.hole, color_id)
+            self._bloom_index = 0
 
     def _on_key(self, event: pygame.event.Event) -> bool:
         if self._name_entry is not None:
@@ -192,17 +293,51 @@ class GameUI:
             return True
         if key == pygame.K_ESCAPE:
             return False
-        if key == pygame.K_SPACE:
-            self._do_draw()
-        elif key == pygame.K_r:
+        if key == pygame.K_n:
+            self._new_game()
+            return True
+        if key == pygame.K_l:
+            self._open_leaderboard()
+            return True
+
+        state = self.game.state
+        if state is GameState.DRAW:
+            if key == pygame.K_SPACE:
+                self._do_draw()
+        elif state is GameState.PLACE:
+            self._on_place_key(key)
+        elif state is GameState.BLOOM:
+            self._on_bloom_key(key)
+        return True
+
+    _CONFIRM_KEYS = (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE)
+    _ARROW_KEYS = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
+
+    def _on_place_key(self, key: int) -> None:
+        if key == pygame.K_r:
             self._rotate()
         elif key == pygame.K_d:
             self._do_discard()
-        elif key == pygame.K_n:
-            self._new_game()
-        elif key == pygame.K_l:
-            self._open_leaderboard()
-        return True
+        elif key in self._CONFIRM_KEYS:
+            self._place_selected()
+        elif key in self._ARROW_KEYS:
+            self._move_cursor(key)
+
+    def _on_bloom_key(self, key: int) -> None:
+        options = self._bloom_options()
+        if not options:
+            return
+        self._bloom_index %= len(options)
+        if key in (pygame.K_LEFT, pygame.K_UP):
+            self._bloom_index = (self._bloom_index - 1) % len(options)
+        elif key in (pygame.K_RIGHT, pygame.K_DOWN):
+            self._bloom_index = (self._bloom_index + 1) % len(options)
+        elif key in self._CONFIRM_KEYS:
+            self._pick_color(options[self._bloom_index])
+        elif pygame.K_1 <= key <= pygame.K_9:
+            index = key - pygame.K_1
+            if index < len(options):
+                self._pick_color(options[index])
 
     def _handle_name_key(self, event: pygame.event.Event) -> bool:
         assert self._name_entry is not None
@@ -428,12 +563,30 @@ class GameUI:
             if placement.orientation != self.orientation:
                 continue
             rect = self._cell_rect(placement.row, placement.col)
-            is_hover = hovered is not None and (placement.row, placement.col) == (
-                hovered.row,
-                hovered.col,
-            )
-            self.draw_alpha_rect((*HIGHLIGHT, 110 if is_hover else 55), rect, radius=6)
-            self.draw_rect(HIGHLIGHT, rect, width=3 if is_hover else 2, radius=6)
+            cell = (placement.row, placement.col)
+            is_hover = hovered is not None and cell == (hovered.row, hovered.col)
+            is_selected = cell == self._selected
+            active = is_hover or is_selected
+            self.draw_alpha_rect((*HIGHLIGHT, 110 if active else 55), rect, radius=6)
+            self.draw_rect(HIGHLIGHT, rect, width=3 if active else 2, radius=6)
+        if self._selected is not None and self.game.current_tile is not None:
+            self._draw_tile_preview(self._selected)
+
+    def _draw_tile_preview(self, cell: tuple[int, int]) -> None:
+        rect = self._cell_rect(cell[0], cell[1])
+        self.draw_rect(TILE_FILL, rect, radius=6)
+        self.draw_rect(HIGHLIGHT, rect, width=3, radius=6)
+        flower_r = max(4, int(self._view()[0] * 0.16))
+        centers = {
+            Direction.N: (rect.centerx, rect.top),
+            Direction.E: (rect.right, rect.centery),
+            Direction.S: (rect.centerx, rect.bottom),
+            Direction.W: (rect.left, rect.centery),
+        }
+        for direction, center in centers.items():
+            color_id = self.game.current_tile.edge_color(direction, self.orientation)
+            self.draw_circle(self._color_rgb(color_id), center, flower_r)
+            self.draw_circle(BOARD_BG, center, flower_r, width=1)
 
     def _draw_tiles(self) -> None:
         cell = self._view()[0]
@@ -547,12 +700,17 @@ class GameUI:
             return y
         bloom = self.game.pending_blooms[0]
         options = sorted(bloom.candidate_colors & self.game.available_colors())
-        self.draw_text(self.font, "Choose a lily colour:", (x, y), PENDING)
+        if options:
+            self._bloom_index %= len(options)
+        self.draw_text(self.font, "Choose a lily colour (\u2190/\u2192, Enter):", (x, y), PENDING)
         y += 30
         for i, color_id in enumerate(options):
             rect = pygame.Rect(x + i * 52, y, 44, 44)
             self.draw_rect(self._color_rgb(color_id), rect, radius=8)
-            self.draw_rect(TEXT, rect, width=2, radius=8)
+            selected = i == self._bloom_index
+            self.draw_rect(
+                HIGHLIGHT if selected else TEXT, rect, width=4 if selected else 2, radius=8
+            )
             self._swatch_rects.append((rect, color_id))
         return y + 60
 

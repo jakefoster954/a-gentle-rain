@@ -23,6 +23,7 @@ import pygame
 from pygame._sdl2 import video as sdl2
 
 from .. import leaderboard
+from ..agents import HeuristicAgent
 from ..engine import Game, GameState
 from ..geometry import Direction
 from ..model import Placement
@@ -80,7 +81,9 @@ class Button:
 class GameUI:
     """Interactive pygame front-end wrapping a :class:`Game`."""
 
-    def __init__(self, seed: int | None = None, data_path: str | None = None) -> None:
+    def __init__(
+        self, seed: int | None = None, data_path: str | None = None, cheat: bool = False
+    ) -> None:
         pygame.init()
         self._init_display()
         self.canvas = pygame.Surface((WINDOW_W * self.s, WINDOW_H * self.s))
@@ -91,6 +94,8 @@ class GameUI:
 
         self._seed = seed
         self._data_path = data_path
+        self._cheat = cheat
+        self._advisor = HeuristicAgent()  # suggests moves for cheat mode (and future hints)
         self.game = Game(seed=seed, data_path=data_path)
         self.orientation = 0
         self.message = ""
@@ -157,10 +162,31 @@ class GameUI:
             self._timer_start = time.perf_counter()
         self.orientation = 0
         self._init_cursor()
+        self._apply_cheat_placement()
         if self.game.state is GameState.PLACE and not self.game.has_legal_placement():
             self.message = "No legal placement — discard this tile."
         else:
             self.message = ""
+
+    def _apply_cheat_placement(self) -> None:
+        if not self._cheat or self.game.state is not GameState.PLACE:
+            return
+        placements = self.game.legal_placements()
+        if not placements:
+            return
+        rec = self._advisor.choose_placement(self.game, placements)
+        self.orientation = rec.orientation
+        self._selected = (rec.row, rec.col)
+
+    def _apply_cheat_bloom(self) -> None:
+        if not self._cheat:
+            return
+        options = self._bloom_options()
+        if not options:
+            return
+        rec = self._advisor.choose_bloom_color(self.game, set(options))
+        if rec in options:
+            self._bloom_index = options.index(rec)
 
     def _do_discard(self) -> None:
         if self.game.state is GameState.PLACE and not self.game.has_legal_placement():
@@ -182,6 +208,7 @@ class GameUI:
             self.message = ""
             self._selected = None
             self._bloom_index = 0
+            self._apply_cheat_bloom()
 
     # ------------------------------------------------------------ keyboard cursor
     def _board_center(self) -> tuple[int, int]:
@@ -267,6 +294,7 @@ class GameUI:
             self.message = ""
             self._selected = None
             self._bloom_index = 0
+            self._apply_cheat_bloom()
 
     def _bloom_options(self) -> list[int]:
         if self.game.state is not GameState.BLOOM or not self.game.pending_blooms:
@@ -282,6 +310,7 @@ class GameUI:
         if color_id in options:
             self.game.resolve_bloom(bloom.hole, color_id)
             self._bloom_index = 0
+            self._apply_cheat_bloom()
 
     def _on_key(self, event: pygame.event.Event) -> bool:
         if self._name_entry is not None:
@@ -427,8 +456,11 @@ class GameUI:
             self._timer_end = time.perf_counter()
         if self.game.is_over and not self._end_handled:
             self._end_handled = True
-            self._name_entry = ""  # prompt for a name to save
             self._entries = leaderboard.load(self._tileset_id)
+            if self._cheat:
+                self._leaderboard_open = True  # cheat games can't be saved
+            else:
+                self._name_entry = ""  # prompt for a name to save
         self.canvas.fill(BG)
         self.draw_rect(BOARD_BG, (0, 0, BOARD_W, WINDOW_H))
         self._legal_cache = (
@@ -804,5 +836,5 @@ class GameUI:
             y += 28
 
 
-def run(seed: int | None = None, data_path: str | None = None) -> None:
-    GameUI(seed=seed, data_path=data_path).run()
+def run(seed: int | None = None, data_path: str | None = None, cheat: bool = False) -> None:
+    GameUI(seed=seed, data_path=data_path, cheat=cheat).run()

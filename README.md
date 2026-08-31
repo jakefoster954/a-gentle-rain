@@ -37,6 +37,7 @@ pip install -e ".[dev]"
 python -m agentle_rain            # or: agentle-rain
 python -m agentle_rain --seed 42  # a repeatable shuffle
 python -m agentle_rain --path my.json  # play a custom tile set
+python -m agentle_rain --cheat    # pre-pick the heuristic's move each turn
 ```
 
 **Controls:** `Space` draw · `R` rotate · **arrows** move the cursor · `Enter`/`Space`
@@ -47,6 +48,10 @@ whole game is keyboard-playable, and the selected cell previews the tile you'll 
 A **timer** runs from your first draw to game end. Each tile set has its own **leaderboard**
 (by score, then fastest time): press `L` to view it, and on game over you can enter a name to
 save your result (blank = skip). Stored under `~/.agentle_rain/leaderboards/`.
+
+Running with `--cheat` pre-selects the heuristic's suggested placement (and bloom colour) each
+turn — press `Enter` to accept or override it as usual; cheat games can't be saved to the
+leaderboard.
 
 ## Programmatic API
 

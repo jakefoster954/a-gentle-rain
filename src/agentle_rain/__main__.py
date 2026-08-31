@@ -1,6 +1,6 @@
 """Command-line entry point: launch the game UI or the tile editor.
 
-python -m agentle_rain [--seed N] [--path tiles.json]
+python -m agentle_rain [--seed N] [--path tiles.json] [--cheat]
 python -m agentle_rain --edit [--path tiles.json]
 """
 
@@ -16,6 +16,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--edit", action="store_true", help="launch the tile editor instead of playing"
+    )
+    parser.add_argument(
+        "--cheat",
+        action="store_true",
+        help="pre-select the heuristic's suggested move each turn (you can override)",
     )
     parser.add_argument(
         "--path",
@@ -51,7 +56,7 @@ def main() -> None:
 
     from .ui.pygame_ui import run
 
-    run(seed=args.seed, data_path=args.path)
+    run(seed=args.seed, data_path=args.path, cheat=args.cheat)
 
 
 if __name__ == "__main__":

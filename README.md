@@ -121,8 +121,10 @@ print(estimate_win_probability(colors, tiles, time_budget=60))
 It plays many random shuffles with a strong online heuristic (`HeuristicAgent`)
 and reports its win rate with a 95% confidence interval. This works for any deck
 size, including the full retail 28, and always returns a number within
-`time_budget` seconds. The heuristic favours building completable 2x2s in colours
-you still need and blooms the colour least likely to recur.
+`time_budget` seconds. The heuristic plays *most-constrained colour first*: it
+cultivates completable 2x2s for the colours it currently has the fewest ways to
+bloom, and at each hole spends the most-constrained available colour — see
+[docs/heuristic.md](docs/heuristic.md) for the full explanation.
 
 From the command line:
 
@@ -167,6 +169,7 @@ src/agentle_rain/
   ui/editor.py     # the tile editor UI
 tools/generate_tiles.py    # regenerate / verify the tile set
 tools/estimate_solvable.py # estimate a set's win probability
+tools/diagnose_losses.py   # analyse why the heuristic loses (diagnostic)
 tests/                     # pytest suite
 ```
 

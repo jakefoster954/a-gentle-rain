@@ -72,26 +72,29 @@ def _bloom_potential(game: Game, placement: Placement, available: set[int]) -> i
 
 
 class HeuristicAgent(RandomAgent):
-    """A stronger online policy for estimating the online win rate.
+    """A strong online policy for estimating the online win rate.
+
+    The guiding principle (applied to both placing and blooming) is *most
+    constrained first*: prioritise the colours you currently have the fewest ways
+    to bloom. A colour's number of "sources" is counted structurally from the
+    board and the remaining tiles, so nothing is tied to a particular tile set.
 
     Placement is scored (lexicographically, higher is better) by:
 
-    1. ``immediate`` — new needed colours bloomed now, weighted by how *scarce*
-       each colour is in the remaining tiles (grabbing a rare colour is worth
-       more than a common one).
+    1. ``immediate`` — new needed colours bloomed now, weighted by criticality
+       (a colour with fewer other sources is worth more).
     2. ``-dead`` — avoid creating an adjacent empty cell that no remaining tile
        can ever fill (a permanent gap).
     3. ``setup`` — L-shapes (2x2s one tile short) that a remaining tile can
-       actually complete and whose colour is still needed, scarcity-weighted.
-    4. ``variety`` — the number of *distinct* still-needed colours those L-shapes
-       set up (more ways to reach the eight).
-    5. ``frontier`` — prefer exposing edge colours that are still plentiful in
-       the deck, so future tiles can attach.
+       actually complete and whose colour is still needed, criticality-weighted,
+       so the agent cultivates holes for under-served colours.
+    4. ``variety`` — the number of *distinct* still-needed colours set up.
+    5. ``frontier`` — prefer exposing edge colours still plentiful in the deck.
     6. ``adjacency`` — a compactness tie-break.
 
-    Blooms spend the colour least likely to recur in another 2x2 (scarcest in the
-    remaining tiles, plus any other open holes that could take it). Everything
-    uses only the remaining *set* of tiles — never the hidden draw order.
+    Blooms spend the most constrained available colour: the one with the fewest
+    other sources (other open holes / completable L-shapes), tie-broken by the
+    scarcer remaining supply. Everything uses only the remaining *set* of tiles.
     """
 
     def choose_placement(self, game: Game, placements: list[Placement]) -> Placement:
@@ -99,42 +102,52 @@ class HeuristicAgent(RandomAgent):
         assert tile is not None
         available = game.available_colors()
         remaining = game.remaining_tiles()
-        # Every oriented edge-tuple a remaining tile could present (any rotation).
-        deck = [tuple(t.edge_color(d, o) for d in Direction) for t in remaining for o in range(4)]
+        deck = _deck_orientations(remaining)
         supply: Counter[int] = Counter()
         for t in remaining:
             supply.update(t.edges)
-        feasible: dict[frozenset, bool] = {}
+        cache: dict[frozenset, bool] = {}
 
         scratch = Board()
         for coord, placed in game.board:
             scratch.place(coord, placed)
+        # How many ways each colour can currently be bloomed elsewhere (before this move).
+        sources = _completable_l_sources(scratch, deck, cache)
 
         best: Placement | None = None
         best_score: tuple | None = None
         for placement in placements:
             coord = (placement.row, placement.col)
             scratch._tiles[coord] = PlacedTile(tile, placement.orientation)
-            score = _evaluate(scratch, game, coord, available, deck, supply, feasible)
+            score = _evaluate(scratch, game, coord, available, deck, supply, sources, cache)
             del scratch._tiles[coord]
             if best_score is None or score > best_score:
                 best, best_score = placement, score
         return best if best is not None else super().choose_placement(game, placements)
 
     def choose_bloom_color(self, game: Game, candidates: set[int]) -> int:
+        deck = _deck_orientations(game.remaining_tiles())
+        sources = _completable_l_sources(game.board, deck, {})
         supply = _remaining_color_counts(game)
         others = game.pending_blooms[1:]  # other holes still awaiting a token
 
-        def recurrence(color: int) -> tuple[int, int]:
-            elsewhere = sum(1 for b in others if color in b.candidate_colors)
-            return (supply.get(color, 0) + elsewhere, color)
+        def constraint(color: int) -> tuple[int, int, int]:
+            elsewhere = sources.get(color, 0) + sum(
+                1 for b in others if color in b.candidate_colors
+            )
+            return (elsewhere, supply.get(color, 0), color)
 
-        return min(candidates, key=recurrence)
+        return min(candidates, key=constraint)
 
 
-def _color_weight(color_id: int, supply: Counter[int]) -> float:
-    """Rarer colours (fewer copies left) are worth more."""
-    return 1.0 / (1.0 + supply.get(color_id, 0))
+def _deck_orientations(tiles: list) -> list:
+    """Every oriented (N, E, S, W) edge-tuple the given tiles could present."""
+    return [tuple(t.edge_color(d, o) for d in Direction) for t in tiles for o in range(4)]
+
+
+def _criticality(color_id: int, sources: Counter[int]) -> float:
+    """A colour with fewer other ways to bloom it is more urgent."""
+    return 1.0 / (1.0 + sources.get(color_id, 0))
 
 
 def _fill_constraints(board: Board, cell: tuple[int, int]) -> dict[int, int]:
@@ -177,6 +190,26 @@ def _known_hole_colors(board: Board, top_left: tuple[int, int]) -> set[int]:
     return colors
 
 
+def _completable_l_sources(board: Board, deck: list, cache: dict) -> Counter[int]:
+    """Per colour, how many open 3-of-4 'L's a remaining tile could complete for it."""
+    sources: Counter[int] = Counter()
+    seen: set[tuple[int, int]] = set()
+    for coord, _ in board:
+        for top_left in board.surrounding_hole_top_lefts(coord):
+            if top_left in seen:
+                continue
+            seen.add(top_left)
+            cells = [(top_left[0] + dr, top_left[1] + dc) for dr in (0, 1) for dc in (0, 1)]
+            present = [cell for cell in cells if cell in board]
+            if len(present) != 3:
+                continue
+            empty = next(cell for cell in cells if cell not in board)
+            if _can_fill(_fill_constraints(board, empty), deck, cache):
+                for colour in _known_hole_colors(board, top_left):
+                    sources[colour] += 1
+    return sources
+
+
 def _evaluate(
     board: Board,
     game: Game,
@@ -184,6 +217,7 @@ def _evaluate(
     available: set[int],
     deck: list,
     supply: Counter[int],
+    sources: Counter[int],
     cache: dict,
 ) -> tuple:
     immediate = 0.0
@@ -197,13 +231,13 @@ def _evaluate(
             for color in board.hole_candidate_colors(top_left) & available:
                 if color not in got:
                     got.add(color)
-                    immediate += _color_weight(color, supply)
+                    immediate += _criticality(color, sources)
         elif len(present) == 3:
             empty = next(cell for cell in cells if cell not in board)
             if _can_fill(_fill_constraints(board, empty), deck, cache):
                 needed = _known_hole_colors(board, top_left) & available
                 if needed:
-                    setup_value += max(_color_weight(c, supply) for c in needed)
+                    setup_value += max(_criticality(c, sources) for c in needed)
                     variety |= needed
 
     dead = 0

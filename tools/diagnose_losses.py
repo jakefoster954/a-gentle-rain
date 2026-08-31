@@ -193,8 +193,9 @@ def main() -> None:
         "Most-missed colours:",
         *[f"  {name}: {n}" for name, n in missed_colour_counts.most_common()],
         "",
-        f"avg discards in lost games: "
-        f"{sum(discards_in_losses) / len(discards_in_losses):.2f}" if discards_in_losses else "",
+        f"avg discards in lost games: {sum(discards_in_losses) / len(discards_in_losses):.2f}"
+        if discards_in_losses
+        else "",
         "",
         "Per-loss detail:",
         *losses,

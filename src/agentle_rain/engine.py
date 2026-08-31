@@ -117,6 +117,11 @@ class Game:
     def deck_remaining(self) -> int:
         return len(self.deck)
 
+    @property
+    def tiles(self) -> list[Tile]:
+        """The full tile set that defines this game (independent of shuffle)."""
+        return list(self._tiles)
+
     def remaining_tiles(self) -> list[Tile]:
         """Tiles still in the deck (the set a perfect-memory player knows remain)."""
         return [self._tiles_by_id[i] for i in self.deck]

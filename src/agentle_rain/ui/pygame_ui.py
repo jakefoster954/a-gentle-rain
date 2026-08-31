@@ -22,6 +22,7 @@ import time
 import pygame
 from pygame._sdl2 import video as sdl2
 
+from .. import leaderboard
 from ..engine import Game, GameState
 from ..geometry import Direction
 from ..model import Placement
@@ -47,6 +48,8 @@ HIGHLIGHT = (90, 200, 140)
 PENDING = (240, 200, 90)
 BUTTON = (54, 64, 78)
 BUTTON_HOVER = (74, 88, 106)
+PANEL = (30, 36, 46)
+ROW_HIGHLIGHT = (54, 64, 78)
 
 
 def hex_to_rgb(value: str) -> tuple[int, int, int]:
@@ -96,12 +99,19 @@ class GameUI:
         self._cursor: int | None = None
         self._timer_start: float | None = None  # set on the first draw
         self._timer_end: float | None = None  # set when the game ends
+        self._tileset_id = leaderboard.tileset_id(self.game.colors, self.game.tiles)
+        self._leaderboard_open = False
+        self._name_entry: str | None = None  # name being typed on game over (None = not entering)
+        self._end_handled = False  # whether the game-over prompt has been shown
+        self._entries: list[leaderboard.Entry] = []
+        self._just_added: leaderboard.Entry | None = None
 
         self.buttons = {
             "draw": Button("Draw tile", "Space", "draw"),
             "rotate": Button("Rotate", "R", "rotate"),
             "discard": Button("Discard", "D", "discard"),
             "new": Button("New Game", "N", "new"),
+            "board": Button("Leaderboard", "L", "board"),
         }
         self._swatch_rects: list[tuple[pygame.Rect, int]] = []
 
@@ -114,7 +124,7 @@ class GameUI:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    running = self._on_key(event.key)
+                    running = self._on_key(event)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._on_click(mouse)
             self._draw(mouse)
@@ -129,6 +139,11 @@ class GameUI:
         self.message = ""
         self._timer_start = None
         self._timer_end = None
+        self._tileset_id = leaderboard.tileset_id(self.game.colors, self.game.tiles)
+        self._leaderboard_open = False
+        self._name_entry = None
+        self._end_handled = False
+        self._just_added = None
 
     def _do_draw(self) -> None:
         if self.game.state is not GameState.DRAW:
@@ -167,7 +182,14 @@ class GameUI:
         if color_id in options:
             self.game.resolve_bloom(bloom.hole, color_id)
 
-    def _on_key(self, key: int) -> bool:
+    def _on_key(self, event: pygame.event.Event) -> bool:
+        if self._name_entry is not None:
+            return self._handle_name_key(event)
+        key = event.key
+        if self._leaderboard_open:
+            if key in (pygame.K_l, pygame.K_ESCAPE):
+                self._leaderboard_open = False
+            return True
         if key == pygame.K_ESCAPE:
             return False
         if key == pygame.K_SPACE:
@@ -178,9 +200,45 @@ class GameUI:
             self._do_discard()
         elif key == pygame.K_n:
             self._new_game()
+        elif key == pygame.K_l:
+            self._open_leaderboard()
         return True
 
+    def _handle_name_key(self, event: pygame.event.Event) -> bool:
+        assert self._name_entry is not None
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self._commit_name()
+        elif event.key == pygame.K_ESCAPE:
+            self._name_entry = None  # skip saving; show the board read-only
+            self._leaderboard_open = True
+        elif event.key == pygame.K_BACKSPACE:
+            self._name_entry = self._name_entry[:-1]
+        elif event.unicode and event.unicode.isprintable() and len(self._name_entry) < 20:
+            self._name_entry += event.unicode
+        return True
+
+    def _open_leaderboard(self) -> None:
+        self._entries = leaderboard.load(self._tileset_id)
+        self._leaderboard_open = True
+
+    def _commit_name(self) -> None:
+        name = (self._name_entry or "").strip()
+        if name:
+            self._just_added = leaderboard.make_entry(
+                name, self.game.score, self._elapsed_seconds(), self.game.is_won
+            )
+            self._entries = leaderboard.add(self._tileset_id, self._just_added)
+        else:
+            self._entries = leaderboard.load(self._tileset_id)
+        self._name_entry = None
+        self._leaderboard_open = True
+
     def _on_click(self, mouse: tuple[int, int]) -> None:
+        if self._name_entry is not None:
+            return  # name entry is keyboard-only
+        if self._leaderboard_open:
+            self._leaderboard_open = False  # click anywhere to close the board
+            return
         for name, button in self.buttons.items():
             if button.enabled and button.rect.collidepoint(mouse):
                 {
@@ -188,6 +246,7 @@ class GameUI:
                     "rotate": self._rotate,
                     "discard": self._do_discard,
                     "new": self._new_game,
+                    "board": self._open_leaderboard,
                 }[name]()
                 return
         for rect, color_id in self._swatch_rects:
@@ -231,6 +290,10 @@ class GameUI:
         self._mouse = mouse
         if self._timer_start is not None and self._timer_end is None and self.game.is_over:
             self._timer_end = time.perf_counter()
+        if self.game.is_over and not self._end_handled:
+            self._end_handled = True
+            self._name_entry = ""  # prompt for a name to save
+            self._entries = leaderboard.load(self._tileset_id)
         self.canvas.fill(BG)
         self.draw_rect(BOARD_BG, (0, 0, BOARD_W, WINDOW_H))
         self._legal_cache = (
@@ -240,6 +303,8 @@ class GameUI:
         self._draw_tiles()
         self._draw_holes()
         self._draw_sidebar(mouse)
+        if self._name_entry is not None or self._leaderboard_open:
+            self._draw_leaderboard_overlay()
         self._update_cursor(mouse)
 
     def _update_cursor(self, mouse: tuple[int, int]) -> None:
@@ -436,7 +501,7 @@ class GameUI:
             button.draw(self, mouse)
 
         if self.message:
-            self.draw_text(self.small, self.message, (x, WINDOW_H - 120), PENDING)
+            self.draw_text(self.small, self.message, (x, WINDOW_H - 158), PENDING)
 
     def _draw_available(self, x: int, y: int) -> int:
         self.draw_text(self.small, "Lily colours (dim = bloomed)", (x, y), MUTED)
@@ -509,6 +574,7 @@ class GameUI:
             state is GameState.PLACE and not self.game.has_legal_placement()
         )
         self.buttons["new"].enabled = True
+        self.buttons["board"].enabled = True
         width = (SIDEBAR_W - 50) // 2
         positions = [
             ("draw", 0, 0),
@@ -516,11 +582,68 @@ class GameUI:
             ("discard", 0, 1),
             ("new", 1, 1),
         ]
-        base_y = WINDOW_H - 90
+        base_y = WINDOW_H - 132
         for name, col, row in positions:
             self.buttons[name].rect = pygame.Rect(
                 x + col * (width + 10), base_y + row * 40, width, 32
             )
+        self.buttons["board"].rect = pygame.Rect(x, base_y + 2 * 40, SIDEBAR_W - 40, 32)
+
+    def _draw_leaderboard_overlay(self) -> None:
+        self.draw_alpha_rect((0, 0, 0, 190), (0, 0, WINDOW_W, WINDOW_H))
+        pw, ph = 660, 540
+        px = (WINDOW_W - pw) // 2
+        py = (WINDOW_H - ph) // 2
+        self.draw_rect(PANEL, (px, py, pw, ph), radius=14)
+        self.draw_rect(TILE_EDGE, (px, py, pw, ph), width=2, radius=14)
+        x = px + 30
+        y = py + 26
+
+        if self._name_entry is not None:
+            outcome = "You win!" if self.game.is_won else "Out of tiles"
+            colour = HIGHLIGHT if self.game.is_won else PENDING
+            self.draw_text(self.big, outcome, (x, y), colour)
+            y += 40
+            summary = (
+                f"Score {self.game.score}    Time {self._format_time(self._elapsed_seconds())}"
+            )
+            self.draw_text(self.font, summary, (x, y), TEXT)
+            y += 34
+            self.draw_text(
+                self.small,
+                "Type your name to save it (leave blank to skip), then Enter:",
+                (x, y),
+                MUTED,
+            )
+            y += 26
+            box = pygame.Rect(x, y, pw - 60, 34)
+            self.draw_rect(BG, box, radius=6)
+            self.draw_rect(HIGHLIGHT, box, width=2, radius=6)
+            self.draw_text(self.font, self._name_entry + "_", (x + 8, y + 6), TEXT)
+            y += 52
+        else:
+            self.draw_text(self.big, "Leaderboard", (x, y), TEXT)
+            self.draw_text(self.small, "L / Esc / click to close", (x + pw - 220, y + 10), MUTED)
+            y += 44
+
+        self.draw_text(self.small, "#", (x, y), MUTED)
+        self.draw_text(self.small, "Name", (x + 46, y), MUTED)
+        self.draw_text(self.small, "Score", (x + pw - 210, y), MUTED)
+        self.draw_text(self.small, "Time", (x + pw - 110, y), MUTED)
+        y += 24
+
+        entries = self._entries[:12]
+        if not entries:
+            self.draw_text(self.font, "No scores yet — be the first!", (x, y + 8), MUTED)
+            return
+        for i, entry in enumerate(entries):
+            if self._just_added is not None and entry == self._just_added:
+                self.draw_rect(ROW_HIGHLIGHT, (px + 16, y - 2, pw - 32, 26), radius=4)
+            self.draw_text(self.font, str(i + 1), (x, y), TEXT)
+            self.draw_text(self.font, entry.name[:16], (x + 46, y), TEXT)
+            self.draw_text(self.font, str(entry.score), (x + pw - 210, y), TEXT)
+            self.draw_text(self.font, self._format_time(entry.time), (x + pw - 110, y), TEXT)
+            y += 28
 
 
 def run(seed: int | None = None, data_path: str | None = None) -> None:

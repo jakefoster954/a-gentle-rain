@@ -40,8 +40,14 @@ python -m agentle_rain --path my.json  # play a custom tile set
 ```
 
 **Controls:** `Space` draw · `R` rotate · left-click a green highlight to place ·
-`D` discard (when nothing fits) · click a colour swatch to bloom a hole · `N` new
-game · `Esc` quit.
+`D` discard (when nothing fits) · click a colour swatch to bloom a hole · `L`
+leaderboard · `N` new game · `Esc` quit.
+
+A **timer** starts on your first draw and stops when the game ends. Each tile set
+has its own **leaderboard** (ordered by score, then fastest time): press `L` to
+view it any time, and when a game ends you can type a name to save your score and
+time (leave it blank to skip). Leaderboards are stored per-user under
+`~/.agentle_rain/leaderboards/`.
 
 ## Programmatic API
 
@@ -176,6 +182,7 @@ src/agentle_rain/
   tilesets.py      # build colours/tiles in code (make_tiles, random_tileset, ...)
   solver.py        # exact optimal-online win probability (small decks)
   analysis.py      # estimate_win_probability (exact + Monte-Carlo)
+  leaderboard.py   # persistent, tileset-specific high-score tables
   data/tiles.json  # the 8 colours and 28 tiles (compact, editable)
   ui/pygame_ui.py  # the interactive game UI
   ui/editor.py     # the tile editor UI

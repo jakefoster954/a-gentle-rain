@@ -40,25 +40,31 @@ comparing these values **in order** (each only breaks ties in the ones above it)
 1. **Immediate blooms** — the total *criticality* of the still‑needed colours this
    placement could bloom right now by completing a 2×2. (Finishing a hole for an
    urgent colour scores highest.)
-2. **No dead cells** — placements that create a permanent unfillable gap are
+2. **Coverage** — how many still‑needed colours can each be matched to a distinct
+   open, completable hole (a bipartite matching). Placements that keep **every**
+   colour reachable score highest; this is the main guard against ending up one
+   colour short.
+3. **No dead cells** — placements that create a permanent unfillable gap are
    penalised.
-3. **Setups** — for each completable, still‑needed L‑shape this placement creates,
+4. **Setups** — for each completable, still‑needed L‑shape this placement creates,
    the criticality of its most urgent needed colour. This makes the agent
    **cultivate holes for under‑served colours** rather than easy ones.
-4. **Variety** — the number of *distinct* still‑needed colours those setups cover
+5. **Variety** — the number of *distinct* still‑needed colours those setups cover
    (more independent routes to finishing all colours).
-5. **Frontier** — prefer exposing edge colours that are still plentiful in the
+6. **Frontier** — prefer exposing edge colours that are still plentiful in the
    deck, so future tiles can attach and more 2×2s become possible.
-6. **Compactness** — a final tie‑break favouring placements touching more existing
+7. **Compactness** — a final tie‑break favouring placements touching more existing
    tiles (denser tableaux create more holes).
 
 If (rarely) nothing scores, it falls back to any legal placement.
 
 ## Choosing which colour blooms
 
-When a 2×2 completes and several still‑needed colours surround it, the agent
-blooms the **most constrained** one — the colour it is least able to get
-elsewhere. Candidates are compared by, in order:
+When a 2×2 completes and several still‑needed colours surround it, the agent first
+keeps only the choices that are **safe** — colours whose use still leaves every
+*other* needed colour matchable to a remaining hole (so it never strands a colour
+it could otherwise have covered). Among the safe choices it blooms the **most
+constrained** colour, compared by, in order:
 
 1. **Fewest other sources** — other open holes plus completable L‑shapes that
    could also yield this colour. Spend the colour with the fewest alternatives;

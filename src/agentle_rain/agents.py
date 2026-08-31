@@ -126,18 +126,28 @@ class HeuristicAgent(RandomAgent):
         return best if best is not None else super().choose_placement(game, placements)
 
     def choose_bloom_color(self, game: Game, candidates: set[int]) -> int:
+        available = game.available_colors()
         deck = _deck_orientations(game.remaining_tiles())
-        sources = _completable_l_sources(game.board, deck, {})
+        cache: dict[frozenset, bool] = {}
+        sources = _completable_l_sources(game.board, deck, cache)
         supply = _remaining_color_counts(game)
-        others = game.pending_blooms[1:]  # other holes still awaiting a token
+        others = [frozenset(b.candidate_colors & available) for b in game.pending_blooms[1:]]
+        # Every other place a still-needed colour could still be bloomed.
+        opportunities = _board_opportunities(game.board, deck, cache, available)
+        opportunities += [s for s in others if s]
 
         def constraint(color: int) -> tuple[int, int, int]:
-            elsewhere = sources.get(color, 0) + sum(
-                1 for b in others if color in b.candidate_colors
-            )
+            elsewhere = sources.get(color, 0) + sum(1 for s in others if color in s)
             return (elsewhere, supply.get(color, 0), color)
 
-        return min(candidates, key=constraint)
+        # Prefer a colour whose removal still leaves every other needed colour
+        # coverable (a matching exists); only then fall back to most-constrained.
+        def keeps_coverage(color: int) -> bool:
+            rest = available - {color}
+            return _max_colour_matching(opportunities, rest) == len(rest)
+
+        safe = [c for c in candidates if keeps_coverage(c)]
+        return min(safe or candidates, key=constraint)
 
 
 def _deck_orientations(tiles: list) -> list:
@@ -210,6 +220,47 @@ def _completable_l_sources(board: Board, deck: list, cache: dict) -> Counter[int
     return sources
 
 
+def _board_opportunities(
+    board: Board, deck: list, cache: dict, available: set[int]
+) -> list[frozenset[int]]:
+    """Colour sets of open, completable L-shapes (restricted to still-needed colours)."""
+    opps: list[frozenset[int]] = []
+    seen: set[tuple[int, int]] = set()
+    for coord, _ in board:
+        for top_left in board.surrounding_hole_top_lefts(coord):
+            if top_left in seen:
+                continue
+            seen.add(top_left)
+            cells = [(top_left[0] + dr, top_left[1] + dc) for dr in (0, 1) for dc in (0, 1)]
+            present = [cell for cell in cells if cell in board]
+            if len(present) != 3:
+                continue
+            empty = next(cell for cell in cells if cell not in board)
+            if _can_fill(_fill_constraints(board, empty), deck, cache):
+                colours = _known_hole_colors(board, top_left) & available
+                if colours:
+                    opps.append(frozenset(colours))
+    return opps
+
+
+def _max_colour_matching(opportunities: list[frozenset[int]], needed: set[int]) -> int:
+    """Max distinct ``needed`` colours matchable to opportunities (bipartite matching)."""
+    holes_for = {c: [i for i, s in enumerate(opportunities) if c in s] for c in needed}
+    match: dict[int, int] = {}
+
+    def assign(colour: int, seen: set[int]) -> bool:
+        for hole in holes_for[colour]:
+            if hole in seen:
+                continue
+            seen.add(hole)
+            if hole not in match or assign(match[hole], seen):
+                match[hole] = colour
+                return True
+        return False
+
+    return sum(1 for c in needed if assign(c, set()))
+
+
 def _evaluate(
     board: Board,
     game: Game,
@@ -254,8 +305,11 @@ def _evaluate(
         if constraints and not _can_fill(constraints, deck, cache):
             dead += 1
 
+    # How many still-needed colours can be matched to open, completable holes:
+    # placements that keep every colour reachable are preferred.
+    coverage = _max_colour_matching(_board_opportunities(board, deck, cache, available), available)
     adjacency = sum(1 for d in Direction if board.neighbour(coord, d) is not None)
-    return (immediate, -dead, setup_value, len(variety), frontier, adjacency)
+    return (immediate, coverage, -dead, setup_value, len(variety), frontier, adjacency)
 
 
 def _remaining_color_counts(game: Game) -> Counter[int]:

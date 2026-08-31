@@ -39,21 +39,14 @@ python -m agentle_rain --seed 42  # a repeatable shuffle
 python -m agentle_rain --path my.json  # play a custom tile set
 ```
 
-**Controls:** `Space` draw · `R` rotate · **arrow keys** move the placement cursor ·
-`Enter` (or `Space`) place · `D` discard (when nothing fits) · `L` leaderboard ·
-`N` new game · `Esc` quit. The mouse works too: left-click a green highlight to
-place, or click a colour swatch to bloom.
+**Controls:** `Space` draw · `R` rotate · **arrows** move the cursor · `Enter`/`Space`
+place · `D` discard · `L` leaderboard · `N` new game · `Esc` quit. When a 2×2 completes,
+pick the lily colour with the **arrows** (or `1`–`9`) and `Enter`. The mouse works too; the
+whole game is keyboard-playable, and the selected cell previews the tile you'll place.
 
-**Blooming a hole:** when a 2×2 completes, choose the lily colour with the
-**arrow keys** (or number keys `1`–`9`) and press `Enter` — or click a swatch. So
-the whole game is playable with the keyboard alone. The selected cell shows a
-preview of the tile you're about to place.
-
-A **timer** starts on your first draw and stops when the game ends. Each tile set
-has its own **leaderboard** (ordered by score, then fastest time): press `L` to
-view it any time, and when a game ends you can type a name to save your score and
-time (leave it blank to skip). Leaderboards are stored per-user under
-`~/.agentle_rain/leaderboards/`.
+A **timer** runs from your first draw to game end. Each tile set has its own **leaderboard**
+(by score, then fastest time): press `L` to view it, and on game over you can enter a name to
+save your result (blank = skip). Stored under `~/.agentle_rain/leaderboards/`.
 
 ## Programmatic API
 
@@ -115,7 +108,7 @@ fewest tiles needed to win.
 ### Win-probability analysis
 
 `estimate_win_probability` answers "how often can this tile set be won, playing
-optimally online (never seeing the future draw order)?"
+well online (never seeing the future draw order)?"
 
 ```python
 from agentle_rain import estimate_win_probability
@@ -125,56 +118,37 @@ colors, tiles = load_colors_and_tiles()
 print(estimate_win_probability(colors, tiles, time_budget=60))
 ```
 
-- **Small decks** (≈ ≤12 tiles): returns the **exact** optimal online win
-  probability via memoised expectimax over the belief state
-  `(board, remaining tiles, bloomed colours, tile in hand)`.
-- **Large decks** (e.g. the retail 28): exact solving is infeasible, so it
-  returns a **Monte-Carlo estimate** — the win rate of a strong online heuristic
-  over many random shuffles, with a 95% confidence interval. That figure is a
-  **lower bound** on the true optimum (optimal play can only do at least as well).
-- It always returns a number within `time_budget` seconds.
+It plays many random shuffles with a strong online heuristic (`HeuristicAgent`)
+and reports its win rate with a 95% confidence interval. This works for any deck
+size, including the full retail 28, and always returns a number within
+`time_budget` seconds. The heuristic favours building completable 2x2s in colours
+you still need and blooms the colour least likely to recur.
 
 From the command line:
 
 ```bash
 python tools/estimate_solvable.py --time-budget 60
-python tools/estimate_solvable.py --path experiments/small.json --time-budget 30
+python tools/estimate_solvable.py --path experiments/example_deck.json --time-budget 30
 ```
 
 ## Editing the tiles
 
-The tile data lives in `src/agentle_rain/data/tiles.json`, in a compact,
-hand-editable format (one colour and one tile per line). You can edit it directly,
-or use the **tile editor**:
+Tile data lives in `src/agentle_rain/data/tiles.json` (compact JSON: one colour and one
+tile per line). Edit it by hand, or use the **tile editor**:
 
 ```bash
-python -m agentle_rain --edit                 # edits the bundled tiles.json
-python -m agentle_rain --edit --path my.json  # edit a separate file instead
+python -m agentle_rain --edit                 # edit the bundled set
+python -m agentle_rain --edit --path my.json  # a separate file (created on save if new)
 ```
 
-The editor lets you define the colours (add/remove/rename/set hex), paint each
-tile's four edges by clicking them, and add/remove tiles — then save (`S`). A
-status line shows the set is playable and whether it matches the retail 8/28.
+The editor lets you add/remove/rename colours and set their hex, paint each tile's four
+edges, and add/remove tiles, then save (`S`). Pointing `--edit` at a non-existent file starts
+a fresh set. `--path` is relative to your cwd; the git-ignored `experiments/` folder is the
+recommended home for scratch sets.
 
-To **start a new experiment set**, point `--edit` at a file that doesn't exist
-yet: the editor opens with the default palette and one blank tile, and creates
-the file (and any parent folders) when you save:
-
-```bash
-python -m agentle_rain --edit --path experiments/new.json
-```
-
-`--path` is relative to your current directory. The repo's `experiments/` folder
-is git-ignored, so it's the recommended place for scratch tile sets — keeping
-them there (or anywhere outside the repo) avoids cluttering the project or
-committing them by accident.
-
-The game and engine accept **any number of colours and tiles** (minimum one
-tile), so trimmed or custom sets load and play fine; only the structure is
-validated (four edges per tile, each referencing an existing colour). Play a
-saved custom file with `python -m agentle_rain --path my.json` (or
-`Game(data_path="my.json")`); playing a missing file prints a friendly error
-telling you to create it with `--edit`.
+Any number of colours and tiles is accepted (min one tile); only the structure is validated.
+Play a custom file with `python -m agentle_rain --path my.json` (or `Game(data_path=...)`); a
+missing file gives a friendly error.
 
 ## Project layout
 
@@ -186,8 +160,7 @@ src/agentle_rain/
   engine.py        # Game: the state machine and public API
   agents.py        # simple automated players for headless simulation
   tilesets.py      # build colours/tiles in code (make_tiles, random_tileset, ...)
-  solver.py        # exact optimal-online win probability (small decks)
-  analysis.py      # estimate_win_probability (exact + Monte-Carlo)
+  analysis.py      # estimate_win_probability (Monte-Carlo heuristic)
   leaderboard.py   # persistent, tileset-specific high-score tables
   data/tiles.json  # the 8 colours and 28 tiles (compact, editable)
   ui/pygame_ui.py  # the interactive game UI
@@ -199,17 +172,11 @@ tests/                     # pytest suite
 
 ## Tile data — please note
 
-The exact per-tile artwork of the real 28 tiles could not be reliably transcribed
-from photographs. `src/agentle_rain/data/tiles.json` currently holds a **valid,
-balanced, playable placeholder set** (8 colours, 28 tiles, each edge is a colour
-id for the N/E/S/W side). It is plain JSON and **designed to be corrected** once
-the true layouts are known — either by hand, with the tile editor
-(`python -m agentle_rain --edit`), or programmatically — no code changes required.
-Regenerate or sanity-check the placeholder with:
-
-```bash
-python tools/generate_tiles.py --stats
-```
+The real 28 tiles couldn't be reliably transcribed from photos, so
+`src/agentle_rain/data/tiles.json` holds a **valid, playable placeholder set** (8 colours,
+28 tiles; each edge is a colour id for the N/E/S/W side). Correct it any time — by hand, in
+the editor, or programmatically — no code changes needed. Regenerate/sanity-check with
+`python tools/generate_tiles.py --stats`.
 
 ## Development
 

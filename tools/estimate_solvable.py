@@ -22,12 +22,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--path", type=Path, default=None, help="tiles.json (default: bundled set)")
     parser.add_argument("--time-budget", type=float, default=60.0, help="seconds to spend")
-    parser.add_argument(
-        "--exact-max-tiles",
-        type=int,
-        default=12,
-        help="attempt an exact solve at or below this tile count",
-    )
     parser.add_argument("--base-seed", type=int, default=0, help="first shuffle seed")
     args = parser.parse_args()
 
@@ -37,7 +31,6 @@ def main() -> None:
         colors,
         tiles,
         time_budget=args.time_budget,
-        exact_max_tiles=args.exact_max_tiles,
         base_seed=args.base_seed,
     )
     print(result)

@@ -1,12 +1,9 @@
-"""Estimate the optimal online win probability of a tile set.
+"""Estimate a tile set's win probability by Monte-Carlo simulation.
 
-The headline function is :func:`estimate_win_probability`. For small decks it
-returns the *exact* optimal online win probability (via
-:func:`agentle_rain.solver.optimal_online_winprob`); for realistic decks (~28
-tiles) exact solving is infeasible, so it returns a Monte-Carlo estimate: the win
-rate of a strong online heuristic over many random shuffles, with a confidence
-interval. That win rate is a lower bound on the true optimum — the best online
-play can only do at least as well as the heuristic.
+:func:`estimate_win_probability` plays many random shuffles with the
+:class:`~agentle_rain.agents.HeuristicAgent` (a strong online policy that never
+sees the future draw order) and reports its win rate with a confidence interval.
+This works for any deck size, including the full 28-tile game.
 """
 
 from __future__ import annotations
@@ -18,7 +15,6 @@ from dataclasses import dataclass
 from .agents import HeuristicAgent, play_game
 from .engine import Game
 from .model import Color, Tile
-from .solver import optimal_online_winprob
 
 
 @dataclass
@@ -26,21 +22,17 @@ class WinProbabilityResult:
     """Outcome of :func:`estimate_win_probability`."""
 
     probability: float
-    method: str  # "exact" or "montecarlo"
     ci_low: float
     ci_high: float
     samples: int
     wins: int
     elapsed: float
-    note: str
 
     def __str__(self) -> str:
-        pct = f"{self.probability:.1%}"
-        if self.method == "exact":
-            return f"P(win) = {pct} (exact optimal online, {self.elapsed:.2f}s)"
         return (
-            f"P(win) \u2248 {pct} [95% CI {self.ci_low:.1%}\u2013{self.ci_high:.1%}], "
-            f"heuristic lower bound over {self.samples} shuffles ({self.elapsed:.1f}s)"
+            f"P(win) \u2248 {self.probability:.1%} "
+            f"[95% CI {self.ci_low:.1%}\u2013{self.ci_high:.1%}] "
+            f"over {self.samples} shuffles ({self.elapsed:.1f}s)"
         )
 
 
@@ -60,39 +52,20 @@ def estimate_win_probability(
     tiles: list[Tile],
     *,
     time_budget: float = 60.0,
-    exact_max_tiles: int = 12,
-    exact_time_fraction: float = 0.5,
     base_seed: int = 0,
     max_samples: int = 200_000,
 ) -> WinProbabilityResult:
-    """Estimate the optimal online win probability within ``time_budget`` seconds.
+    """Estimate the heuristic's win rate over random shuffles within ``time_budget``.
 
-    Small decks (``len(tiles) <= exact_max_tiles``) are solved exactly if that
-    fits in ``exact_time_fraction`` of the budget; otherwise a Monte-Carlo
-    heuristic estimate is returned. Either way a number is always produced.
+    Always returns a number: it keeps simulating games until the time budget or
+    ``max_samples`` is reached, then reports the win rate and a 95% confidence
+    interval.
     """
     start = time.perf_counter()
-
-    if len(tiles) <= exact_max_tiles:
-        exact = optimal_online_winprob(colors, tiles, time_budget=time_budget * exact_time_fraction)
-        if exact is not None:
-            elapsed = time.perf_counter() - start
-            return WinProbabilityResult(
-                probability=exact,
-                method="exact",
-                ci_low=exact,
-                ci_high=exact,
-                samples=0,
-                wins=0,
-                elapsed=elapsed,
-                note="exact optimal online win probability",
-            )
-
     agent = HeuristicAgent()
     wins = 0
     n = 0
-    # Amortise the clock check across a batch of games.
-    batch = 32
+    batch = 16  # amortise the clock check across a batch of games
     while n < max_samples and (time.perf_counter() - start) < time_budget:
         for _ in range(batch):
             game = Game(colors=colors, tiles=tiles, seed=base_seed + n)
@@ -103,11 +76,9 @@ def estimate_win_probability(
     low, high = wilson_interval(wins, n)
     return WinProbabilityResult(
         probability=wins / n if n else 0.0,
-        method="montecarlo",
         ci_low=low,
         ci_high=high,
         samples=n,
         wins=wins,
         elapsed=elapsed,
-        note="lower bound on optimal online win probability (heuristic policy)",
     )

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import time
 
 import pygame
 from pygame._sdl2 import video as sdl2
@@ -93,6 +94,8 @@ class GameUI:
         self._legal_cache: list[Placement] = []
         self._mouse: tuple[int, int] = (0, 0)
         self._cursor: int | None = None
+        self._timer_start: float | None = None  # set on the first draw
+        self._timer_end: float | None = None  # set when the game ends
 
         self.buttons = {
             "draw": Button("Draw tile", "Space", "draw"),
@@ -124,11 +127,15 @@ class GameUI:
         self.game = Game(seed=self._seed, data_path=self._data_path)
         self.orientation = 0
         self.message = ""
+        self._timer_start = None
+        self._timer_end = None
 
     def _do_draw(self) -> None:
         if self.game.state is not GameState.DRAW:
             return
         self.game.draw()
+        if self._timer_start is None:
+            self._timer_start = time.perf_counter()
         self.orientation = 0
         if self.game.state is GameState.PLACE and not self.game.has_legal_placement():
             self.message = "No legal placement — discard this tile."
@@ -222,6 +229,8 @@ class GameUI:
     # ---------------------------------------------------------------- drawing
     def _draw(self, mouse: tuple[int, int]) -> None:
         self._mouse = mouse
+        if self._timer_start is not None and self._timer_end is None and self.game.is_over:
+            self._timer_end = time.perf_counter()
         self.canvas.fill(BG)
         self.draw_rect(BOARD_BG, (0, 0, BOARD_W, WINDOW_H))
         self._legal_cache = (
@@ -260,6 +269,17 @@ class GameUI:
 
     def _color_rgb(self, color_id: int) -> tuple[int, int, int]:
         return hex_to_rgb(self.game.colors[color_id].hex)
+
+    def _elapsed_seconds(self) -> float:
+        if self._timer_start is None:
+            return 0.0
+        end = self._timer_end if self._timer_end is not None else time.perf_counter()
+        return end - self._timer_start
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        minutes = int(seconds // 60)
+        return f"{minutes:d}:{seconds - minutes * 60:04.1f}"
 
     # --------------------------------------------------------- display / present
     def _init_display(self) -> None:
@@ -399,6 +419,7 @@ class GameUI:
             f"Tiles left: {self.game.deck_remaining}",
             f"Blooms: {self.game.blooms_placed} / {self.game.num_colors}",
             f"Discarded: {len(self.game.discarded)}",
+            f"Time: {self._format_time(self._elapsed_seconds())}",
         ]
         for line in rows:
             self.draw_text(self.font, line, (x, y), TEXT)

@@ -124,7 +124,8 @@ print(estimate_win_probability(colors, tiles, time_budget=60))
 ```
 
 It plays many random shuffles with a strong online heuristic (`HeuristicAgent`)
-and reports its win rate with a 95% confidence interval. This works for any deck
+and reports its win rate with a 95% confidence interval, along with the average
+and highest score across all runs. This works for any deck
 size, including the full retail 28, and always returns a number within
 `time_budget` seconds. The heuristic plays *most-constrained colour first*: it
 cultivates completable 2x2s for the colours it currently has the fewest ways to

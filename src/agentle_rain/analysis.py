@@ -27,12 +27,15 @@ class WinProbabilityResult:
     samples: int
     wins: int
     elapsed: float
+    average_score: float
+    highest_score: int
 
     def __str__(self) -> str:
         return (
             f"P(win) \u2248 {self.probability:.1%} "
             f"[95% CI {self.ci_low:.1%}\u2013{self.ci_high:.1%}] "
-            f"over {self.samples} shuffles ({self.elapsed:.1f}s)"
+            f"over {self.samples} shuffles ({self.elapsed:.1f}s)\n"
+            f"Average score {self.average_score:.1f}, highest score {self.highest_score}"
         )
 
 
@@ -65,12 +68,16 @@ def estimate_win_probability(
     agent = HeuristicAgent()
     wins = 0
     n = 0
+    total_score = 0
+    highest_score = 0
     batch = 16  # amortise the clock check across a batch of games
     while n < max_samples and (time.perf_counter() - start) < time_budget:
         for _ in range(batch):
             game = Game(colors=colors, tiles=tiles, seed=base_seed + n)
             play_game(game, agent)
             wins += int(game.is_won)
+            total_score += game.score
+            highest_score = max(highest_score, game.score)
             n += 1
     elapsed = time.perf_counter() - start
     low, high = wilson_interval(wins, n)
@@ -81,4 +88,6 @@ def estimate_win_probability(
         samples=n,
         wins=wins,
         elapsed=elapsed,
+        average_score=total_score / n if n else 0.0,
+        highest_score=highest_score,
     )

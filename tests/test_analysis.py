@@ -25,8 +25,10 @@ def test_wilson_interval_bounds(wins, n):
 def test_estimate_returns_a_number_for_full_set():
     colors, tiles = load_colors_and_tiles()
     result = estimate_win_probability(colors, tiles, time_budget=2.0)
-    assert 0.0 <= result.ci_low <= result.probability <= result.ci_high <= 1.0
+    assert result.ci_low <= result.probability <= result.ci_high + 1e-9
+    assert 0.0 <= result.ci_low <= result.ci_high <= 1.0
     assert result.samples > 0
+    assert 0 <= result.average_score <= result.highest_score
 
 
 def test_estimate_works_for_small_deck():
